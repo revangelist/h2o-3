@@ -1,0 +1,88 @@
+import pandas as pd
+import xgboost as xgb
+import time
+from sklearn.preprocessing import LabelEncoder
+
+from h2o.estimators.xgboost import *
+from tests import pyunit_utils
+
+'''
+The goal of this test is to compare h2oxgboost and native xgboost performance in terms of
+1. training time and performance
+2. scoring time and performance
+
+Ideally, the two should yield the same results with the same seeds.  However, we have slightly different
+parameter sets between the two.  Need to resolve this, Michalk/Pavel/Nidhi/Megan/whoever, help?
+'''
+def arlines_test():
+    assert H2OXGBoostEstimator.available() is True
+
+    # train H2O XGBoost first
+    higgs_h2o_train = h2o.import_file(pyunit_utils.locate('bigdata/laptop/higgs_train_imbalance_100k.csv'))
+    higgs_h2o_test = h2o.import_file(pyunit_utils.locate('bigdata/laptop/higgs_test_imbalance_100k.csv'))
+    higgs_h2o_train[0] = higgs_h2o_train[0].asfactor()
+    higgs_h2o_test[0] = higgs_h2o_test[0].asfactor()
+    myX = list(higgs_h2o_train.names)
+    y = "response"
+    myX.remove(y)
+
+    h2oParams = {"ntrees":100, "max_depth":10, "seed":987654321, "learn_rate":0.7, "col_sample_rate_per_tree" : 0.9,
+                 "min_rows" : 5, "score_tree_interval": 100}
+    h2oModel = H2OXGBoostEstimator(**h2oParams)
+    # gather, print and save performance numbers for h2o model
+    h2oModel.train(x=myX, y=y, training_frame=higgs_h2o_train)
+    h2oTrainTime = h2oModel._model_json["output"]["run_time"]
+    time1 = time.time()
+    h2oPredict = h2oModel.predict(higgs_h2o_test)
+    h2oPredictTime = time.time()-time1
+
+    # build native XGBoost model
+    nativeParam = {'eta': h2oParams["learn_rate"], 'objective': 'multi:softprob', 'booster': 'gbtree',
+                   'max_depth': h2oParams["max_depth"], 'seed': h2oParams["seed"],
+                   "colsample_bytree":h2oParams["col_sample_rate_per_tree"], "min_child_weight":h2oParams["min_rows"]}
+
+
+    nativeTrain = genDMatrix(higgs_h2o_train, myX, y)
+    nativeTest = genDMatrix(higgs_h2o_test, myX, y)
+    time1 = time.time()
+    nativeParam = {'eta': h2oParams["learn_rate"], 'objective': 'binary:logistic', 'booster': 'gbtree',
+             'max_depth': h2oParams["max_depth"], 'seed': h2oParams["seed"], 'min_child_weight':h2oParams["min_rows"],
+                   'colsample_bytree':h2oParams["col_sample_rate_per_tree"]}
+    nativeModel = xgb.train(params=nativeParam,
+                            dtrain=nativeTrain ,
+                            num_boost_round=h2oParams["ntrees"])
+    nativeTrainTime = time.time()-time1
+    time1=time.time()
+    nativePred = nativeModel.predict(data=nativeTest)
+    nativeScoreTime = time.time()-time1
+
+    # Result comparison in terms of time
+    print("H2OXGBoost train time is {0}s.  Native XGBoost train time is {1}s\n.  H2OGBoost scoring time is {2}s."
+          "  Native XGBoost scoring time is {3}s.".format(h2oTrainTime, nativeTrainTime, h2oPredictTime,
+                                                          nativeScoreTime))
+    # Result comparison in terms of accuracy right now, that is the only thing available
+    nativeLabels = nativeTest.get_label()
+    nativeErr = sum(1 for i in range(len(nativePred)) if int(nativePred[i] > 0.5) != nativeLabels[i])/float(len(nativePred))
+    h2oErr = sum(1 for i in range(len(h2oPredict.nrow))
+                 if int(h2oPredict[i,'predict'] != higgs_h2o_test[i, 'response']))/float(len(nativePred))
+    print("H2OXGBoost error rate is {0} and native XGBoost error rate is {1}".format(h2oErr, nativeErr))
+
+    # compare prediction probability and they should agree if they use the same seed
+    numCom = min(10, h2oPredict.nrow)
+
+def genDMatrix(h2oFrame, xlist, yresp):
+    pandaFtrain = h2oFrame.as_data_frame(use_pandas=True, header=True)
+    # need to change column 0 to categorical
+    c0 = pd.get_dummies(pandaFtrain[yresp], prefix=yresp, drop_first=True)
+    pandaFtrain.drop([yresp], axis=1, inplace=True)
+    pandaF = pd.concat([c0, pandaFtrain], axis=1)
+    pandaF.rename(columns={c0.columns[0]:yresp}, inplace=True)
+    data = pandaF.as_matrix(xlist)
+    label = pandaF.as_matrix([yresp])
+
+    return xgb.DMatrix(data=data, label=label)
+
+if __name__ == "__main__":
+    pyunit_utils.standalone_test(arlines_test)
+else:
+    arlines_test()
