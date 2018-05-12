@@ -1,7 +1,6 @@
 import pandas as pd
 import xgboost as xgb
 import time
-from sklearn.preprocessing import LabelEncoder
 
 from h2o.estimators.xgboost import *
 from tests import pyunit_utils
@@ -63,12 +62,18 @@ def arlines_test():
     # Result comparison in terms of accuracy right now, that is the only thing available
     nativeLabels = nativeTest.get_label()
     nativeErr = sum(1 for i in range(len(nativePred)) if int(nativePred[i] > 0.5) != nativeLabels[i])/float(len(nativePred))
-    h2oErr = sum(1 for i in range(len(h2oPredict.nrow))
-                 if int(h2oPredict[i,'predict'] != higgs_h2o_test[i, 'response']))/float(len(nativePred))
+    h2oPredictLocal = h2oPredict.as_data_frame(use_pandas=True, header=True)
+    h2oErr = sum(1 for i in range(h2oPredict.nrow)
+                 if abs(h2oPredictLocal['predict'][i] - nativeLabels[i])>1e-6)/float(len(nativePred))
     print("H2OXGBoost error rate is {0} and native XGBoost error rate is {1}".format(h2oErr, nativeErr))
+    assert (h2oErr <= nativeErr) or abs(h2oErr-nativeErr) < 1e-6, \
+        "H2OXGBoost predict accuracy {0} and native XGBoost predict accuracy are too different!".format(h2oErr, nativeErr)
 
     # compare prediction probability and they should agree if they use the same seed
-    numCom = min(10, h2oPredict.nrow)
+    for ind in range(h2oPredict.nrow):
+        assert abs(nativePred[ind]-h2oPredictLocal['p1'][ind])<1e-6, \
+            "H2O prediction prob: {0} and XGBoost prediction prob: {1}.  They are very " \
+            "different.".format(h2oPredict[ind,'p1'], nativePred[ind])
 
 def genDMatrix(h2oFrame, xlist, yresp):
     pandaFtrain = h2oFrame.as_data_frame(use_pandas=True, header=True)
