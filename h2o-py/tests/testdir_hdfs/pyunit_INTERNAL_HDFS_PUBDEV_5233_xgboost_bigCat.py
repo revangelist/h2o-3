@@ -15,10 +15,15 @@ The dataset contains categoricals only of different cardinality.
 Ideally, the two should yield the same results with the same seeds.  However, we have slightly different
 parameter sets between the two.  Need to resolve this, Michalk/Pavel/Nidhi/Megan/whoever, help?
 '''
-def bigCat_test():
+def bigCat_test_hdfs():
     assert H2OXGBoostEstimator.available() is True
-    trainFileList = ['bigdata/laptop/jira/tenThousandCat10C.csv', 'bigdata/laptop/jira/tenThousandCat50C.csv',
-                     'bigdata/laptop/jira/tenThousandCat100C.csv'] # all categorical files
+
+    hadoop_namenode_is_accessible = pyunit_utils.hadoop_namenode_is_accessible()
+    if hadoop_namenode_is_accessible:
+        hdfs_name_node = pyunit_utils.hadoop_namenode()
+
+    trainFileList = ['/datasets/bigCatFiles/oneMillionCat10C.csv', '/datasets/bigCatFiles/oneMillionCat50C.csv',
+                     '/datasets/bigCatFiles/oneMillionCat100C.csv'] # all categorical files
     h2oParams = {"ntrees":100, "max_depth":10, "seed":987654321, "learn_rate":0.7, "col_sample_rate_per_tree" : 0.9,
                  "min_rows" : 5, "score_tree_interval": 100}
     nativeParam = {'eta': h2oParams["learn_rate"], 'objective': 'binary:logistic', 'booster': 'gbtree',
@@ -26,7 +31,7 @@ def bigCat_test():
                    'colsample_bytree':h2oParams["col_sample_rate_per_tree"]}
 
     for fname in trainFileList:
-        trainFile = genTrainFiles(fname)     # load in dataset and add response column
+        trainFile = genTrainFiles(fname, hdfs_name_node)     # load in dataset and add response column
         myX = trainFile.names
         y='response'
         myX.remove(y)
@@ -74,8 +79,10 @@ def summarizeResult(h2oPredict, nativePred, h2oTrainTime, h2oPredictTime, native
             "H2O prediction prob: {0} and XGBoost prediction prob: {1}.  They are very " \
             "different.".format(h2oPredict[ind,'p1'], nativePred[ind])
 
-def genTrainFiles(trainStr):
-    trainFrame = h2o.import_file(pyunit_utils.locate(trainStr))
+def genTrainFiles(trainStr, hdfs_name_node):
+    print("Import airlines_all.csv from HDFS")
+    url = "hdfs://{0}{1}".format(hdfs_name_node, trainStr)
+    trainFrame = h2o.import_file(url)
     yresponse = pyunit_utils.random_dataset_enums_only(trainFrame.nrow, 1, factorL=2, misFrac=0)
     yresponse.set_name(0,'response')
     trainFrame.cbind(yresponse)
@@ -88,7 +95,7 @@ def genDMatrix(h2oFrame, xlist, yresp):
         ctemp = pd.get_dummies(pandaFtrain[cname], prefix=cname, drop_first=True)
         pandaFtrain.drop([cname], axis=1, inplace=True)
         pandaFtrain = pd.concat([ctemp, pandaFtrain], axis=1)
-
+        
     c0 = pd.get_dummies(pandaFtrain[yresp], prefix=yresp, drop_first=True)
     pandaFtrain.drop([yresp], axis=1, inplace=True)
     pandaF = pd.concat([c0, pandaFtrain], axis=1)
@@ -99,6 +106,6 @@ def genDMatrix(h2oFrame, xlist, yresp):
     return xgb.DMatrix(data=data, label=label)
 
 if __name__ == "__main__":
-    pyunit_utils.standalone_test(bigCat_test)
+    pyunit_utils.standalone_test(bigCat_test_hdfs)
 else:
-    bigCat_test()
+    bigCat_test_hdfs()
